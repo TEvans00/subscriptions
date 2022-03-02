@@ -65,6 +65,30 @@ ruleset manage_sensors {
     }
   }
 
+  rule initiate_subscription_to_sensor {
+    select when sensor_installer installation_finished
+      wellKnown_eci re#(.+)#
+      setting(wellKnown_eci)
+    always {
+      raise sensor event "subscription_request" attributes {
+        "wellKnown_eci": wellKnown_eci
+      }
+    }
+  }
+
+  rule subscribe_to_sensor {
+    select when sensor subscription_request
+      wellKnown_eci re#(.+)#
+      setting(wellKnown_eci)
+    always {
+      raise wrangler event "subscription" attributes {
+        "wellKnown_Tx": wellKnown_eci,
+        "Rx_role":"manager",
+        "Tx_role":"sensor",
+      }
+    }
+  }
+
   rule trigger_sensor_installation {
     select when wrangler new_child_created
     pre {
@@ -72,7 +96,7 @@ ruleset manage_sensors {
       auth_token = meta:rulesetConfig{"auth_token"}
       session_id = meta:rulesetConfig{"session_id"}
     }
-    if true then
+    if eci then
       event:send(
         { "eci": eci,
           "eid": "install-ruleset",

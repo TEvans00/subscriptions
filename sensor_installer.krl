@@ -6,6 +6,7 @@ ruleset sensor_installer {
     >>
     author "Tyla Evans"
     use module io.picolabs.wrangler alias wrangler
+    use module io.picolabs.subscription alias subs
   }
 
   global {
@@ -26,6 +27,9 @@ ruleset sensor_installer {
         }
       },
       "io.picolabs.wovyn.emitter": {
+        "config": {}
+      },
+      "sensor_subscriptions": {
         "config": {}
       }
     }
@@ -91,6 +95,7 @@ ruleset sensor_installer {
       child_channel = wrangler:channels("system,child")
       child_eci = child_channel.head().get("id")
       sensor_eci = ent:sensor_eci
+      wellKnown_eci = subs:wellKnown_Rx(){"id"}.klog("wellKnown_eci:")
     }
     if installation_finished && parent_eci then
       event:send({
@@ -99,7 +104,8 @@ ruleset sensor_installer {
         "type": "installation_finished",
         "attrs": {
           "child_eci": child_eci,
-          "sensor_eci": sensor_eci
+          "sensor_eci": sensor_eci,
+          "wellKnown_eci": wellKnown_eci
         }
       })
     fired {
