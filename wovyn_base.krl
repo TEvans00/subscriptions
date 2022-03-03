@@ -2,19 +2,22 @@ ruleset wovyn_base {
   meta {
     name "Wovyn Base"
     author "Tyla Evans"
-    use module com.twilio.sdk alias sdk
-      with
-        authToken = meta:rulesetConfig{"auth_token"}
-        sessionID = meta:rulesetConfig{"session_id"}
     use module sensor_profile
+    use module io.picolabs.subscription alias subs
   }
 
   global {
     getProfile = function() {
       sensor_profile:profile
-    };
+    }
+    managers = function() {
+      subs:established().filter(
+        function(sub){
+          sub{"Tx_role"} == "manager"
+        }
+      )
+    }
     default_temperature_threshold = 74
-    default_notification_number = "+13033324277"
   }
 
   rule process_heartbeat {
@@ -46,12 +49,26 @@ ruleset wovyn_base {
 
   rule threshold_notification {
     select when wovyn threshold_violation
+    foreach managers() setting (manager)
     pre {
       profile = getProfile()
-      notification_number = profile{"notification_number"}.defaultsTo(default_notification_number).klog("notification_number:")
       threshold = profile{"temperature_threshold"}.defaultsTo(default_temperature_threshold).klog("threshold:")
-      body = ("Warning: The temperature has reached " + event:attrs{"temperature"} + " degrees, which is above the threshold of " + threshold + " degrees.").klog("temperature warning message: ")
+      name = profile{"name"}.klog("name")
+      eci = manager{"Tx"}.klog("eci:")
+      host = (manager{"Tx_host"}.defaultsTo(meta:host)).klog("host:")
     }
-    if false then sdk:sendMessage(notification_number, "+16066033227", body) setting(response)
+    if eci then event:send(
+        { "eci": eci,
+          "eid": "threshold-violation",
+          "domain": "sensor",
+          "type": "threshold_violation",
+          "attrs": {
+            "temperature": event:attrs{"temperature"},
+            "time": event:attrs{"time"},
+            "threshold": threshold,
+            "name": name
+          }
+        }, host
+      )
   }
 }

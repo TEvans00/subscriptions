@@ -11,9 +11,6 @@ ruleset sensor_installer {
 
   global {
     rulesets = {
-      "com.twilio.sdk": {
-        "config": {}
-      },
       "sensor_profile": {
         "config": {}
       },
@@ -21,10 +18,7 @@ ruleset sensor_installer {
         "config": {}
       },
       "wovyn_base": {
-        "config": {
-          "auth_token": meta:rulesetConfig{"auth_token"},
-          "session_id": meta:rulesetConfig{"session_id"}
-        }
+        "config": {}
       },
       "io.picolabs.wovyn.emitter": {
         "config": {}

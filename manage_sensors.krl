@@ -8,31 +8,44 @@ ruleset manage_sensors {
     provides sensors, temperatures
     shares sensors, temperatures
     use module io.picolabs.wrangler alias wrangler
+    use module io.picolabs.subscription alias subs
   }
 
   global {
-    default_notification_number = "+13033324277"
     default_threshold = 78
 
     sensors = function() {
-      ent:sensors
+      subs:established().filter(
+        function(sub){
+          sub{"Tx_role"} == "sensor"
+        }
+      ).map(
+        function(sensor){
+          eci = sensor{"Tx"}.klog("eci:")
+          host = (sensor{"Tx_host"}.defaultsTo(meta:host)).klog("host:")
+          profile = wrangler:picoQuery(eci,"sensor_profile","profile",{},host).klog("profile:")
+          info = sensor.put("name", profile{"name"})
+          info
+        }
+      )
     }
 
     temperatures = function() {
-      ent:sensors.map(
-        function(v,k){
-          name = k.klog("name:")
-          eci = v{"eci"}.klog("eci:")
-          ready = v{"ready"}.klog("ready")
-          eci && ready => wrangler:picoQuery(eci,"temperature_store","temperatures",{}) | []
-        })
+      return sensors().reduce(
+        function(acc, sensor){
+          eci = sensor{"Tx"}.klog("eci:")
+          host = (sensor{"Tx_host"}.defaultsTo(meta:host)).klog("host:")
+          name = sensor{"name"}.klog("name:")
+          temperatures = wrangler:picoQuery(eci,"temperature_store","temperatures",{}, host).klog("temperatures:")
+          return acc.put(eci, {"name": name, "temperatures": temperatures})
+        }, {})
     }
   }
 
   rule intialization {
     select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
     always {
-      ent:sensors := {}
+      ent:eci_to_name := {}
     }
   }
 
@@ -40,32 +53,67 @@ ruleset manage_sensors {
     select when sensor new_sensor
     pre {
       name = event:attrs{"name"}.klog("name:")
-      exists = (ent:sensors && ent:sensors >< name).klog("already exists:")
-      ready = exists && ent:sensors{name}{"ready"}.klog("ready:")
     }
-    if exists then
-      send_directive(ready => "sensor_ready" | "initializing_sensor", {"sensor_name":name})
-    notfired {
-      ent:sensors{name} := {"ready": false}
+    send_directive("initializing_sensor", {"sensor_name":name})
+    always {
       raise wrangler event "new_child_request"
         attributes { "name": name,
                      "backgroundColor": "#13A169" }
     }
   }
 
-  rule store_sensor {
+  rule store_sensor_name {
     select when wrangler new_child_created
     pre {
       eci = event:attrs{"eci"}.klog("eci:")
       name = event:attrs{"name"}.klog("name:")
     }
-    if name then noop()
+    if eci && name then noop()
     fired {
-      ent:sensors{name} := {"eci": eci, "ready": false}
+      ent:eci_to_name{eci} := name
     }
   }
 
-  rule initiate_subscription_to_sensor {
+  rule trigger_sensor_installation {
+    select when wrangler new_child_created
+    pre {
+      eci = event:attrs{"eci"}.klog("eci:")
+    }
+    if eci then
+      event:send(
+        { "eci": eci,
+          "eid": "install-ruleset",
+          "domain": "wrangler",
+          "type": "install_ruleset_request",
+          "attrs": {
+            "absoluteURL": meta:rulesetURI,
+            "rid": "sensor_installer"
+          }
+        }
+      )
+  }
+
+  rule introduce_sensor {
+    select when sensor introduction
+      wellKnown_eci re#(.+)#
+      setting(wellKnown_eci)
+      pre {
+        host = event:attrs{"host"}
+      }
+      if host && host != "" then noop()
+      fired {
+        raise sensor event "subscription_request" attributes {
+          "wellKnown_eci": wellKnown_eci,
+          "host": host
+        }
+      } else {
+        raise sensor event "subscription_request" attributes {
+          "wellKnown_eci": wellKnown_eci
+        }
+      }
+  }
+
+  rule initiate_subscription_to_child_sensor {
     select when sensor_installer installation_finished
       wellKnown_eci re#(.+)#
       setting(wellKnown_eci)
@@ -80,46 +128,24 @@ ruleset manage_sensors {
     select when sensor subscription_request
       wellKnown_eci re#(.+)#
       setting(wellKnown_eci)
+    pre {
+      host = event:attrs{"host"}
+    }
     always {
       raise wrangler event "subscription" attributes {
         "wellKnown_Tx": wellKnown_eci,
         "Rx_role":"manager",
         "Tx_role":"sensor",
+        "Tx_host": host || meta:host
       }
     }
-  }
-
-  rule trigger_sensor_installation {
-    select when wrangler new_child_created
-    pre {
-      eci = event:attrs{"eci"}.klog("eci:")
-      auth_token = meta:rulesetConfig{"auth_token"}
-      session_id = meta:rulesetConfig{"session_id"}
-    }
-    if eci then
-      event:send(
-        { "eci": eci,
-          "eid": "install-ruleset",
-          "domain": "wrangler",
-          "type": "install_ruleset_request",
-          "attrs": {
-            "absoluteURL": meta:rulesetURI,
-            "rid": "sensor_installer",
-            "config": {
-              "auth_token": auth_token,
-              "session_id": session_id
-            },
-          }
-        }
-      )
   }
 
   rule initialize_sensor_profile {
     select when sensor_installer installation_finished
     pre {
       eci = event:attrs{"child_eci"}.klog("eci:")
-      sensor = (ent:sensors.filter(function(v,k){v{"eci"} == eci})).klog("sensor:")
-      name = (sensor.keys()[0]).klog("name:")
+      name = ent:eci_to_name{eci}.klog("name:")
     }
     if name then
       event:send({
@@ -129,38 +155,23 @@ ruleset manage_sensors {
         "attrs": {
           "name": name,
           "temperature_threshold": default_threshold,
-          "notification_number": default_notification_number
         }
       })
-  }
-
-  rule mark_sensor_ready {
-    select when sensor_installer installation_finished
-    pre {
-      eci = event:attrs{"child_eci"}.klog("eci:")
-      sensor = (ent:sensors.filter(function(v,k){v{"eci"} == eci})).klog("sensor:")
-      name = (sensor.keys()[0]).klog("name:")
-      sensor_eci = event:attrs{"sensor_eci"}.klog("sensor eci:")
-    }
-    if name then noop()
-    fired {
-      ent:sensors{name} := {"eci": eci, "sensor_eci": sensor_eci, "ready": true}
-    }
   }
 
   rule delete_sensor {
     select when sensor unneeded_sensor
     pre {
       name = event:attrs{"name"}.klog("name:")
-      exists = (ent:sensors >< name).klog("exists:")
-      eci = ent:sensors{name}{"eci"}.klog("eci:")
+      sensor = ent:eci_to_name.filter(function(v,k){ v == name}).klog("sensor:")
+      eci = sensor.keys()[0].klog("eci:")
     }
-    if exists && eci then
+    if eci then
       send_directive("deleting_sensor", {"sensor_name":name})
     fired {
       raise wrangler event "child_deletion_request"
         attributes {"eci": eci};
-      clear ent:sensors{name}
+      clear ent:eci_to_name{eci}
     }
   }
 }

@@ -12,7 +12,6 @@ ruleset sensor_profile {
         "name": ent:name,
         "location": ent:location,
         "temperature_threshold": ent:threshold,
-        "notification_number": ent:notification_number
       }
     };
   }
@@ -24,7 +23,6 @@ ruleset sensor_profile {
       ent:name := ent:name.defaultsTo("Wovyn Sensor").klog("initializing name:")
       ent:location := ent:location.defaultsTo("Living Room").klog("initializing location:")
       ent:threshold := ent:threshold.defaultsTo(74).klog("initializing threshold:")
-      ent:notification_number := ent:notification_number.defaultsTo("+13033324277").klog("initializing notification_number:")
     }
   }
 
@@ -57,16 +55,6 @@ ruleset sensor_profile {
     if true then noop()
     fired {
       ent:threshold := threshold
-    }
-  }
-
-  rule update_notification_number {
-    select when sensor profile_updated
-      notification_number re#(.+)#
-      setting(notification_number)
-    if true then noop()
-    fired {
-      ent:notification_number := notification_number
     }
   }
 }
